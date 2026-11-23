@@ -49,14 +49,16 @@
 ```sh
 python3 build.py                 # src/ → index.html 조립
 python3 tools/generate_icons.py  # 아이콘 PNG 다시 만들기
+./deploy.sh                      # 빌드 결과를 gh-pages 브랜치로 배포
 ```
 
 - `src/index.html` : 화면 구조·CSS (조립 표시 `<script>/*__ART_JS__*/</script>`, `<script>/*__APP_JS__*/</script>`)
 - `src/office-art.js` : 픽셀 사무실 배경·캐릭터 드로잉
 - `src/app.js` : 직원 지침, Gemini 호출, 자동 배정, 칸반·로그·저장
 
-빌드 결과는 항상 저장소 루트의 `index.html` 하나이므로, 고친 뒤 `index.html` 을 커밋하면
-GitHub Pages에 그대로 반영됩니다.
+GitHub Pages는 이 저장소의 **`gh-pages` 브랜치**(루트)를 배포 대상으로 보고 있습니다.
+소스를 고쳤으면 `./deploy.sh` 를 실행하면 되고, 스크립트가 build 후 gh-pages에 올립니다.
+(`main` 브랜치에는 소스와 빌드 결과가 함께 있습니다)
 
 ## 안내
 
