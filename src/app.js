@@ -134,14 +134,18 @@
      4. Gemini API 설정
      ========================================================= */
   var API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models/';
-  var DEFAULT_MODEL = 'gemini-3.8-flash';
+  var DEFAULT_MODEL = 'gemini-3.6-flash';
+  // 실제로 무료 등급에서 안정적으로 응답하는 모델을 앞에 둔다
   var MODELS = [
-    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (권장 · 무료)' },
-    { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (최신 · 무료)' },
-    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (안정 · 무료)' },
+    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (권장 · 무료)' },
     { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite (빠름 · 무료)' },
-    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (가벼움 · 무료)' }
+    { id: 'gemini-3.1-flash-lite', label: 'Gemini 3.1 Flash-Lite (가벼움 · 무료)' },
+    { id: 'gemini-3.8-flash', label: 'Gemini 3.8 Flash (혼잡할 수 있음 · 무료)' },
+    { id: 'gemini-4-hydrogen', label: 'Gemini 4 Hydrogen (혼잡할 수 있음 · 무료)' }
   ];
+  // 혼잡(500·503)·한도(429)로 막히면 이 순서로 자동 재시도한다
+  var FALLBACK_MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+  var RETRY_KINDS = { server: true, quota: true };
 
   function ApiError(kind, user, detail) {
     this.kind = kind;
@@ -259,6 +263,49 @@
       if (e instanceof ApiError) throw e;
       throw new ApiError('network', '인터넷 연결을 확인해 주세요.', e && e.message ? String(e.message) : '');
     });
+  }
+
+  // 고른 모델 → 안정 모델 순서. 이미 앞에 있는 모델은 중복해서 넣지 않는다.
+  function fallbackChain(first) {
+    var chain = [first || DEFAULT_MODEL];
+    for (var i = 0; i < FALLBACK_MODELS.length; i++) {
+      if (chain.indexOf(FALLBACK_MODELS[i]) === -1) chain.push(FALLBACK_MODELS[i]);
+    }
+    return chain;
+  }
+
+  // 혼잡(500·503)·한도(429)면 다음 안정 모델로 스스로 넘어가 이어서 처리한다.
+  // auth·billing·blocked·timeout·bad_request 등은 재시도하지 않고 바로 알린다.
+  function requestGeminiWithFallback(opts) {
+    var chain = fallbackChain(opts.model);
+    var idx = 0;
+    function attempt() {
+      var o = {};
+      for (var k in opts) { if (Object.prototype.hasOwnProperty.call(opts, k)) o[k] = opts[k]; }
+      o.model = chain[idx];
+      return requestGemini(o).then(function (r) {
+        r.requestedModel = chain[0];
+        r.attemptedModel = chain[idx];
+        r.fellBack = idx > 0;
+        r.attempted = chain.slice(0, idx + 1);
+        return r;
+      }).catch(function (e) {
+        var kind = e && e.kind;
+        if (RETRY_KINDS[kind] && idx + 1 < chain.length) {
+          idx++;
+          return attempt();
+        }
+        if (RETRY_KINDS[kind]) {
+          e.tried = chain.slice(0, idx + 1);
+          var note = '시도한 모델: ' + e.tried.join(', ');
+          e.detail = e.detail ? (e.detail + ' / ' + note) : note;
+          e.user += ' (모델 ' + e.tried.length + '개가 모두 응답하지 못했어요)';
+          e.message = e.user + (e.detail ? ' / ' + e.detail : '');
+        }
+        throw e;
+      });
+    }
+    return attempt();
   }
 
   /* =========================================================
@@ -1206,14 +1253,23 @@
 
   function callEmployee(who, text) {
     if (!state.key || state.demo) return demoAnswer(who, text);
-    return requestGemini({
+    return requestGeminiWithFallback({
       key: state.key,
       model: state.model,
       system: PROMPTS[who] + FORMAT_RULES,
       text: text,
       timeoutMs: 120000
     }).then(function (r) {
-      return { text: r.text, model: r.model, demo: false };
+      if (r.fellBack) {
+        addLog('시스템', r.requestedModel + ' 쪽이 바빠서 ' + r.attemptedModel + '로 이어서 처리했어요', 'ok');
+      }
+      return {
+        text: r.text,
+        model: r.model,
+        demo: false,
+        fellBack: !!r.fellBack,
+        fallbackFrom: r.fellBack ? r.requestedModel : ''
+      };
     });
   }
 
@@ -1547,7 +1603,7 @@
     if (!key) { setKeyStatus('먼저 API 키를 넣어 주세요.', 'bad'); return; }
     setKeyStatus('연결 확인 중… (5~15초 걸릴 수 있어요)', 'ing');
     var t0 = Date.now();
-    requestGemini({
+    requestGeminiWithFallback({
       key: key,
       model: model,
       system: '너는 연결 상태를 확인하는 도우미야. 짧게 답해.',
@@ -1555,7 +1611,11 @@
       timeoutMs: 60000
     }).then(function (r) {
       var sec = ((Date.now() - t0) / 1000).toFixed(1);
-      setKeyStatus('✅ 연결 성공! ' + model + ' · ' + sec + '초 · 응답: ' + clip(r.text, 20), 'ok');
+      if (r.fellBack) {
+        setKeyStatus('✅ 연결 성공! ' + r.requestedModel + ' 쪽이 바빠서 ' + r.attemptedModel + '가 응답했어요 (' + sec + '초). 설정에서 이 모델을 고르면 다음부터 바로 됩니다.', 'ok');
+      } else {
+        setKeyStatus('✅ 연결 성공! ' + r.attemptedModel + ' · ' + sec + '초 · 응답: ' + clip(r.text, 20), 'ok');
+      }
     }).catch(function (e) {
       setKeyStatus('❌ ' + (e.user || '연결 실패') + (e.detail ? ' (' + e.detail + ')' : ''), 'bad');
     });
