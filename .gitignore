@@ -1,0 +1,11 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+
+# 의존성·임시 파일
+node_modules/
+__pycache__/
+*.pyc
+tmp/
+*.log
