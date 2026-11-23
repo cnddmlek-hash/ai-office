@@ -5,7 +5,7 @@
       (fetch 핸들러에서 그냥 return 하면 브라우저가 평소처럼 요청한다)
    3) 정적 파일은 network-first — 새로 배포된 버전이 바로 반영되고, 오프라인일 때만 캐시를 쓴다.
 */
-const CACHE = 'ai-office-v1';
+const CACHE = 'ai-office-v2';
 const ASSETS = [
   './',
   './index.html',
